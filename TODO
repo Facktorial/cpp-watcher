@@ -1,0 +1,12 @@
+## To Do
+
+- Remove IORef timestap
+    > Make solution more modular and more functional.
+    * [ ] Remove IORef timestamps
+    * [ ] Replace them with recursion
+    * [ ] Unify timeouts
+- Make thing more release-like
+- Improve support for clang-tidy
+
+## Done
+
