@@ -23,3 +23,6 @@ For completness: example is from cmake's build folder, where src and watcher fil
 * in case `OK` watcher will deduce name (from make stdout) of binary and run it, print out stdout, in case `-doCat` will cat-out watched file
 * watcher have interactive mode: at the moment is possible to force recompile, force running given `clang-tidy` command, switching if is cat done after `OK`
 
+## Next steps
+* improve handling clang-tools
+* fix code (using IORef instead funcional features)
