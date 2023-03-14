@@ -7,6 +7,10 @@
     * [ ] Unify timeouts
 - Make thing more release-like
 - Improve support for clang-tidy
+- Completer
+- line numberer
+- Package like
+- HotReloading
 
 ## Done
 

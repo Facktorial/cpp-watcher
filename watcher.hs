@@ -59,6 +59,7 @@ putBoldBlue = putStrFormated Blue True
 putBoldGreen = putStrFormated Green True
 putGreen = putStrFormated Green False
 putBoldRed = putStrFormated Red True
+putRed = putStrFormated Red False
 
 mapToSpaces :: String -> String
 mapToSpaces = replicate <$> length <*> const ' '
@@ -98,7 +99,7 @@ compileFile doCat filepath may_command = do
 
         Left (err :: SomeException) -> do
             putBoldRed $ "\nCompilation failed with:\n"
-              ++ (show err) ++ ":\n"
+              ++ (show err)
             pure ()
 
 
@@ -142,7 +143,15 @@ watchFile doCat filepath may_command = do
                       return ()
                   Just SwitchCat -> watchFile (not doCat) (filepath) (may_command)
                   Just RunClangTidy -> case may_command of
-                      Just cmd -> callCommand cmd
+                      Just cmd -> do
+                          tidyResult <- try (callCommand cmd)
+                          case tidyResult of
+                              Right _ -> putBoldGreen "TIDY done" >> pure ()
+                              Left (err :: SomeException) -> do
+                                  putBoldRed $ "\nBTW file won't compile...\n"
+                                  putBoldRed $ show err
+                                  pure ()
+
                       Nothing -> pure()
                   _ -> putBoldBlue "Tell this to your mother"
               putStr "λ> " >> pure ()
