@@ -12,6 +12,10 @@
 - line numberer
 - Example images
 - LOG run results
+- multiple file development
+    * [x] add Add option
+    * [ ] vargs files
+    * [x] handling exceptions
 
 ## Done
 

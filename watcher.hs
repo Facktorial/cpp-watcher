@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase #-}
 
-import Control.Monad (forever, void, when, (<=<))
+import Control.Monad (foldM, filterM, forever, void, when, (<=<))
 import System.Directory
 import System.Process (
   callCommand, readProcess, createProcess, waitForProcess, proc
@@ -15,6 +15,7 @@ import Control.Exception (try, SomeException, Exception, throwIO)
 import Data.List (elemIndex)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Char (isAlphaNum)
+import Data.Text (pack, unpack, stripPrefix)
 import Data.Time.Clock (getCurrentTime)
 import System.Timeout (timeout)
 
@@ -31,7 +32,7 @@ data Color = Red | Green | Blue
 
 type MyCommand = String
 
-data Setting = Setting { cat :: Bool, file :: FilePath, tidy :: Maybe MyCommand }
+data Setting = Setting { cat :: Bool, files :: [FilePath], tidy :: Maybe MyCommand }
   deriving (Eq, Show, Read)
 
 data Input
@@ -39,6 +40,8 @@ data Input
     | Compile
     | SwitchCat
     | GDB
+    | ListFiles
+    | AddFiles [String]
     deriving (Read, Show)
 
 parseInput :: String -> Maybe Input
@@ -47,7 +50,10 @@ parseInput ":tidy" = Just RunClangTidy
 parseInput ":compile" = Just Compile
 parseInput ":c" = Just Compile
 parseInput ":cat" = Just SwitchCat
-parseInput _ = Nothing
+parseInput ":ls" = Just ListFiles
+parseInput str = case stripPrefix (pack ":add ") (pack str) of
+    Just rest -> Just $ AddFiles $ words (unpack rest)
+    Nothing -> Nothing
 
 colorString :: Color -> String
 colorString Red = "91"
@@ -82,7 +88,7 @@ getBinaryName output =
 
 
 compileFile :: Setting -> IO ()
-compileFile (Setting doCat filepath may_command) = do
+compileFile (Setting doCat filepaths may_command) = do
     callCommand "clear"
     --compileResult <- readProcess "make" [] "" >>= putGreen
     --compileResult <- try (readProcess "make" [takeWhile isAlphaNum filepath] "")
@@ -96,10 +102,10 @@ compileFile (Setting doCat filepath may_command) = do
                              -- =<< try (callCommand $ "make run-" ++ filepath)
                              =<< try (callCommand $ "./" ++ (getBinaryName x))
                              -- =<< try (callCommand command)
-            if doCat then
-                putBoldGreen "\nFile:" >>
+            if doCat then do
+                putBoldGreen "\nFile:"
                 --void $ callCommand $ "cat " ++ filepath
-                (callCommand $ "cat " ++ filepath)
+                mapM_ (\f -> callCommand $ "cat " ++ f) filepaths
             else pure ()
 
         Left (err :: SomeException) -> do
@@ -108,20 +114,20 @@ compileFile (Setting doCat filepath may_command) = do
             pure ()
 
 
-watchFile :: Setting -> IO ()
-watchFile (Setting doCat filepath may_command) = do
-    initTimeRef <- newIORef =<< getModificationTime filepath
+watchFiles :: Setting -> IO ()
+watchFiles (Setting doCat filepaths may_command) = do
+    initTimeRef <- newIORef =<< maximum <$> mapM getModificationTime filepaths
     forever $ do
         --putStrLn "new loop"
         threadDelay time_period
         initTime <- readIORef initTimeRef
-        modifiedTime <- getModificationTime filepath
+        modifiedTime <- maximum <$> mapM (getModificationTime) filepaths
         --threadDelay time_period >> putStrLn (filepath ++ ": " ++ show modifiedTime)
         --          >> putStrLn ((mapToSpaces filepath) ++ ": " ++ show initTime)
 
         when (modifiedTime > initTime) $ do
         --when (modifiedTime >) <=< readIORef $ initTimeRef $ do
-            compileFile $ Setting doCat filepath may_command
+            compileFile $ Setting doCat filepaths may_command
             writeIORef initTimeRef modifiedTime
             pure ()
 
@@ -144,11 +150,15 @@ watchFile (Setting doCat filepath may_command) = do
 
               case maybeInput of 
                   Just Compile -> do
-                      compileFile $ Setting doCat filepath may_command
+                      compileFile $ Setting doCat filepaths may_command
                       return ()
-                  Just SwitchCat -> watchFile $ Setting (not doCat) (filepath) (may_command)
+                  Just SwitchCat -> watchFiles $ Setting (not doCat) (filepaths) (may_command)
+                  Just ListFiles -> mapM_ (putStrLn <$> (" " ++)) filepaths
+                  Just (AddFiles newfiles) -> do
+                      exFiles <- filterM doesFileExist newfiles
+                      watchFiles $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command)
                   Just GDB -> do
-                      compileFile $ Setting doCat filepath Nothing -- FIXME
+                      compileFile $ Setting doCat filepaths Nothing -- FIXME
                       putBoldBlue "Gimmie path to binary"
                       binary <- getLine
                       putBoldBlue "Gimmie seq of instructions"
@@ -172,7 +182,7 @@ watchFile (Setting doCat filepath may_command) = do
                           case tidyResult of
                               Right _ -> putBoldGreen "TIDY done" >> pure ()
                               Left (err :: SomeException) -> do
-                                  putBoldRed $ "\nBTW file won't compile...\n"
+                                  putBoldRed $ "\nBTW files won't compile...\n"
                                   putBoldRed $ show err
                                   pure ()
 
@@ -182,7 +192,7 @@ watchFile (Setting doCat filepath may_command) = do
 
             Nothing -> do
                 initTime <- readIORef initTimeRef
-                modifiedTime <- getModificationTime filepath
+                modifiedTime <- maximum <$> mapM (getModificationTime) filepaths
                 when (modifiedTime > initTime) $ writeIORef breakLoop True
                 pure ()
             ) 
@@ -215,5 +225,5 @@ main = do
     args <- getArgs
 
     case parseArgs args of
-        (doCat, Just filepath, command) -> watchFile $ Setting doCat filepath command
+        (doCat, Just filepath, command) -> watchFiles $ Setting doCat [filepath] command
         _ -> putStrLn "Usage: watchfile ?-doCat? <filepath> ?tidy command?."
