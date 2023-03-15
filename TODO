@@ -5,12 +5,13 @@
     * [ ] Remove IORef timestamps
     * [ ] Replace them with recursion
     * [ ] Unify timeouts
+- Fix GDB feature
 - Make thing more release-like
 - Improve support for clang-tidy
 - Completer
 - line numberer
-- Package like
-- HotReloading
+- Example images
+- LOG run results
 
 ## Done
 

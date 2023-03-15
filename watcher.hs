@@ -31,13 +31,18 @@ data Color = Red | Green | Blue
 
 type MyCommand = String
 
+data Setting = Setting { cat :: Bool, file :: FilePath, tidy :: Maybe MyCommand }
+  deriving (Eq, Show, Read)
+
 data Input
     = RunClangTidy
     | Compile
     | SwitchCat
+    | GDB
     deriving (Read, Show)
 
 parseInput :: String -> Maybe Input
+parseInput ":gdb" = Just GDB
 parseInput ":tidy" = Just RunClangTidy
 parseInput ":compile" = Just Compile
 parseInput ":c" = Just Compile
@@ -76,8 +81,8 @@ getBinaryName output =
        _ -> "NO_BINARY_FOUND"
 
 
-compileFile :: Bool -> FilePath -> Maybe MyCommand -> IO ()
-compileFile doCat filepath may_command = do
+compileFile :: Setting -> IO ()
+compileFile (Setting doCat filepath may_command) = do
     callCommand "clear"
     --compileResult <- readProcess "make" [] "" >>= putGreen
     --compileResult <- try (readProcess "make" [takeWhile isAlphaNum filepath] "")
@@ -103,8 +108,8 @@ compileFile doCat filepath may_command = do
             pure ()
 
 
-watchFile :: Bool -> FilePath -> Maybe MyCommand -> IO ()
-watchFile doCat filepath may_command = do
+watchFile :: Setting -> IO ()
+watchFile (Setting doCat filepath may_command) = do
     initTimeRef <- newIORef =<< getModificationTime filepath
     forever $ do
         --putStrLn "new loop"
@@ -116,7 +121,7 @@ watchFile doCat filepath may_command = do
 
         when (modifiedTime > initTime) $ do
         --when (modifiedTime >) <=< readIORef $ initTimeRef $ do
-            compileFile doCat filepath may_command
+            compileFile $ Setting doCat filepath may_command
             writeIORef initTimeRef modifiedTime
             pure ()
 
@@ -139,9 +144,28 @@ watchFile doCat filepath may_command = do
 
               case maybeInput of 
                   Just Compile -> do
-                      compileFile doCat filepath may_command
+                      compileFile $ Setting doCat filepath may_command
                       return ()
-                  Just SwitchCat -> watchFile (not doCat) (filepath) (may_command)
+                  Just SwitchCat -> watchFile $ Setting (not doCat) (filepath) (may_command)
+                  Just GDB -> do
+                      compileFile $ Setting doCat filepath Nothing -- FIXME
+                      putBoldBlue "Gimmie path to binary"
+                      binary <- getLine
+                      putBoldBlue "Gimmie seq of instructions"
+                      -- TODO
+                      -- Gimmie seq of instructions
+                      -- :b x.cpp; :threadinfo; run;
+                      -- [":b","x.cpp;",":threadinfo;","run;"]
+                      instructions <- getLine >>= putStrLn . show . words
+                      gdbResult <- try (callCommand $ "gdb " ++ binary) -- FIXME
+                      case gdbResult of
+                          Left (err :: SomeException) -> do
+                              putBoldRed $ "\nBTW gdb failed...\n"
+                              putBoldRed $ show err
+                              pure ()
+                          _ -> pure ()
+
+                      return ()
                   Just RunClangTidy -> case may_command of
                       Just cmd -> do
                           tidyResult <- try (callCommand cmd)
@@ -191,5 +215,5 @@ main = do
     args <- getArgs
 
     case parseArgs args of
-        (doCat, Just filepath, command) -> watchFile doCat filepath command
+        (doCat, Just filepath, command) -> watchFile $ Setting doCat filepath command
         _ -> putStrLn "Usage: watchfile ?-doCat? <filepath> ?tidy command?."
