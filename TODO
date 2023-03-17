@@ -9,6 +9,9 @@
 - Make thing more release-like
 - Improve support for clang-tidy
 - Completer
+    * [x] basic file completer
+    * [ ] fix interrupting with timeouts
+    * [ ] passing partial inputs
 - line numberer
 - Example images
 - LOG run results
@@ -16,6 +19,7 @@
     * [x] add Add option
     * [ ] vargs files
     * [x] handling exceptions
+- add history completer
 
 ## Done
 

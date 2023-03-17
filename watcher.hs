@@ -1,20 +1,24 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase #-}
 
+import System.Console.Haskeline hiding (throwIO)
 import Control.Monad (foldM, filterM, forever, void, when, (<=<))
+import Control.Monad.IO.Class (liftIO)
 import System.Directory
 import System.Process (
   callCommand, readProcess, createProcess, waitForProcess, proc
                       )
 import Control.Concurrent (threadDelay)
 import System.Environment
+import System.FilePath.Posix (takeFileName)
+import System.FilePath ((</>))
 import System.IO
 import System.IO.Error
 import Control.Exception (try, SomeException, Exception, throwIO)
 
 import Data.List (elemIndex)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, isSpace)
 import Data.Text (pack, unpack, stripPrefix)
 import Data.Time.Clock (getCurrentTime)
 import System.Timeout (timeout)
@@ -26,7 +30,7 @@ data BreakLoopException = BreakLoopException
 instance Exception BreakLoopException
 
 time_period = 1000000
-time_out = 3000000
+time_out = 1000000
 
 data Color = Red | Green | Blue
 
@@ -114,6 +118,94 @@ compileFile (Setting doCat filepaths may_command) = do
             pure ()
 
 
+startWith :: String -> [String] -> [String]
+startWith prefix = filter (\s -> take (length prefix) s == prefix)
+
+
+getFilesInPath :: FilePath -> IO [FilePath]
+getFilesInPath path = do
+    files <- getDirectoryContents path
+    return $ filter (\f -> f /= "." && f /= "..") files
+
+
+completerFilename :: FilePath -> String -> IO [Completion]
+completerFilename path stub = do
+    files <- getFilesInPath path
+    return $ map (simpleCompletion . takeFileName) $ startWith stub files
+
+
+filenameCompleter :: CompletionFunc IO
+filenameCompleter = completeWord Nothing " \t" $ \stub -> do
+    let path = takeWhile (/= ' ') stub
+    isDir <- doesDirectoryExist path
+    if isDir
+        then completerFilename path (drop (length path) stub)
+        else return []
+
+
+completer2Loop :: Maybe FilePath -> String -> InputT IO (String)
+completer2Loop mpath promt = do
+    --minput <- getInputLine ""
+    --case minput of
+       --Nothing -> return ""
+       --Just input -> do
+    input <- liftIO getLine
+    let args = words input
+    let input' = reverse $ dropWhile isSpace $ reverse input
+    if null input'
+       then completer2Loop mpath promt
+       else do
+           case mpath of
+             Just file -> do
+                 --completions <- liftIO (completerFilename file (reverse input))
+                 completions <- liftIO (completerFilename file input)
+                 let completionTexts = map (simpleCompletion . replacement) completions
+                 outputStrLn $ unlines $ show <$> completionTexts
+             Nothing -> return ()
+           return input'
+
+
+completerLoop :: Maybe FilePath -> IO (String)
+completerLoop mpath = runInputT defaultSettings (loop' path)
+    where
+      path = maybe (".") id mpath
+      loop' xpath = do
+        liftIO $ putStr "\b"
+        --minput <- getInputLine ""
+        liftIO $ hFlush stdout
+        minput <- fmap (fmap (filter (/= '\n'))) $ getInputLine ""
+        case minput of
+          Nothing -> return ""
+          Just input -> do
+            let args = words input
+            case args of
+              [cmd] | cmd == "quit" -> return ""
+              _ -> do
+                completions <- liftIO (completerFilename xpath (reverse input))
+                let completionTexts = map (simpleCompletion . replacement) completions
+                outputStr $ unlines $ show <$> completionTexts
+                loop' xpath
+
+
+-- completerLoop :: Maybe FilePath -> IO (String)
+-- completerLoop mpath = runInputT defaultSettings (loop' path)
+--     where
+--       path = maybe (".") id mpath
+--       loop' xpath = do
+--         minput <- getInputLine "> "
+--         case minput of
+--           Nothing -> return ""
+--           Just input -> do
+--             let args = words input
+--             case args of
+--               [cmd] | cmd == "quit" -> return ""
+--               _ -> do
+--                 completions <- liftIO (completerFilename xpath (reverse input))
+--                 let completionTexts = map (simpleCompletion . replacement) completions
+--                 outputStrLn $ unlines $ show <$> completionTexts
+--                 loop' xpath
+
+
 watchFiles :: Setting -> IO ()
 watchFiles (Setting doCat filepaths may_command) = do
     initTimeRef <- newIORef =<< maximum <$> mapM getModificationTime filepaths
@@ -143,6 +235,8 @@ watchFiles (Setting doCat filepaths may_command) = do
               False -> pure ()
 
           input <- timeout time_out getLine
+          --input <- timeout time_out (completerLoop Nothing)
+          --input <- timeout time_out $ runInputT defaultSettings (completer2Loop Nothing "> ")
           -- FIXME
           case input of
             Just input -> do
@@ -156,6 +250,9 @@ watchFiles (Setting doCat filepaths may_command) = do
                   Just ListFiles -> mapM_ (putStrLn <$> (" " ++)) filepaths
                   Just (AddFiles newfiles) -> do
                       exFiles <- filterM doesFileExist newfiles
+                      case exFiles of
+                          [] -> putRed "[]"
+                          xs -> putStrLn $ show xs
                       watchFiles $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command)
                   Just GDB -> do
                       compileFile $ Setting doCat filepaths Nothing -- FIXME
