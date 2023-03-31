@@ -20,6 +20,11 @@
     * [ ] vargs files
     * [x] handling exceptions
 - add history completer
+- ASM function mode
 
 ## Done
 
+- ignores
+    * [x] add flags
+    * [x] remove flags
+    * [x] from file remove flags
