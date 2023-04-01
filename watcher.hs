@@ -164,16 +164,17 @@ compileFile (Setting doCat filepaths may_command ignores) = do
                              -- =<< try (callCommand $ "make run-" ++ filepath)
                              =<< try (callCommand $ "./" ++ (getBinaryName x))
                              -- =<< try (callCommand command)
-            if doCat then do
-                putBoldGreen "\nFile:"
-                --void $ callCommand $ "cat " ++ filepath
-                mapM_ (\f -> callCommand $ "cat " ++ f) filepaths
-            else pure ()
-
+            pure ()
         Left (err :: SomeException) -> do
             putBoldRed $ "\nCompilation failed with:\n"
               ++ (show err)
             pure ()
+
+    if doCat then do
+        putBoldGreen "\nFile:"
+        --void $ callCommand $ "cat " ++ filepath
+        mapM_ (\f -> callCommand $ "cat " ++ f) filepaths
+    else pure ()
 
 
 startWith :: String -> [String] -> [String]
