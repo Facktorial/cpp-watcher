@@ -8,7 +8,7 @@ import System.Directory hiding (findFiles)
 import System.Process (
   callCommand, readProcess, createProcess, waitForProcess, proc
                       )
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, forkIO, MVar)
 import System.Environment
 import System.FilePath.Posix (takeFileName)
 import System.FilePath ((</>))
@@ -265,8 +265,9 @@ completerLoop mpath = runInputT defaultSettings (loop' path)
 --                 loop' xpath
 
 
-watchFiles :: Setting -> IO ()
-watchFiles (Setting doCat filepaths may_command flag_ignores) = do
+watchFiles :: MVar Setting -> IO ()
+--watchFiles (Setting doCat filepaths may_command flag_ignores) = do
+watchFiles settingsMVar = do
     initTimeRef <- newIORef =<< maximum <$> mapM getModificationTime filepaths
     forever $ do
         --putStrLn "new loop"
@@ -277,105 +278,121 @@ watchFiles (Setting doCat filepaths may_command flag_ignores) = do
         --          >> putStrLn ((mapToSpaces filepath) ++ ": " ++ show initTime)
 
         when (modifiedTime > initTime) $ do
+            settings <- takeMVar settingMVar
+
         --when (modifiedTime >) <=< readIORef $ initTimeRef $ do
-            compileFile $ Setting doCat filepaths may_command flag_ignores
+            compileFile settings
             writeIORef initTimeRef modifiedTime
             pure ()
 
-        putStr "λ> "
-        hFlush stdout
+watchPromt :: MVar Setting -> IO ()
+--watchPromt (Setting doCat filepaths may_command flag_ignores) = do
+watchPromt settingMVar = do
+    Setting { cat = doCat
+            , files = filepaths
+            , tidy = may_command
+            , ignores = flag_ignores
+            } <- takeMVar settingMVar
+    putStr "λ> "
+    hFlush stdout
 
-        breakLoop <- newIORef False
-        result <- try (forever $ do
-          --readIORef breakLoop >>= putBoldGreen . show
-          readIORef breakLoop >>= \case
-              --True -> break ()
-              True -> throwIO BreakLoopException
-              False -> pure ()
+    --breakLoop <- newIORef False
+    --result <- try (forever $ do
+    forever $ do
+      --readIORef breakLoop >>= putBoldGreen . show
+      --readIORef breakLoop >>= \case
+          --True -> break ()
+          --True -> throwIO BreakLoopException
+          --False -> pure ()
 
-          input <- timeout time_out getLine
-          --input <- timeout time_out (completerLoop Nothing)
-          --input <- timeout time_out $ runInputT defaultSettings (completer2Loop Nothing "> ")
-          -- FIXME
-          case input of
-            Just input -> do
-              let maybeInput = parseInput input
+      input <- timeout time_out getLine
+      --input <- timeout time_out (completerLoop Nothing)
+      --input <- timeout time_out $ runInputT defaultSettings (completer2Loop Nothing "> ")
+      -- FIXME
+      case input of
+        Just input -> do
+          let maybeInput = parseInput input
 
-              case maybeInput of 
-                  Just Compile -> do
-                      compileFile $ Setting doCat filepaths may_command flag_ignores
-                      return ()
-                  Just SwitchCat -> watchFiles $ Setting (not doCat) (filepaths) (may_command) flag_ignores
-                  Just ListFiles -> mapM_ (putStrLn <$> (" " ++)) filepaths
-                  Just ListFlags -> mapM_ (putStrLn <$> (" " ++)) flag_ignores
-                  Just (AddFiles newfiles) -> do
-                      exFiles <- filterM doesFileExist newfiles
-                      case exFiles of
-                          [] -> putRed "[]"
-                          xs -> putStrLn $ show xs
-                      watchFiles $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
-                  Just (Ignore newfiles) -> do
-                      case newfiles of
-                          [] -> putRed "[]"
-                          xs -> putStrLn $ show xs
-                      watchFiles $ Setting (doCat) filepaths (may_command) (concat [flag_ignores, newfiles])
-                  Just (RemoveFlags remove_those) -> do
-                      let flags = filter (\x -> x `notElem` remove_those) flag_ignores
+          case maybeInput of 
+              Just Compile -> do
+                  compileFile $ Setting doCat filepaths may_command flag_ignores
+                  return ()
+              --Just SwitchCat -> watchPromt $ Setting (not doCat) (filepaths) (may_command) flag_ignores
+              --Just SwitchCat -> putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+              Just ListFiles -> mapM_ (putStrLn <$> (" " ++)) filepaths
+              Just ListFlags -> mapM_ (putStrLn <$> (" " ++)) flag_ignores
+              Just (AddFiles newfiles) -> do
+                  exFiles <- filterM doesFileExist newfiles
+                  case exFiles of
+                      [] -> putRed "[]"
+                      xs -> putStrLn $ show xs
+                  --watchPromt $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+                  --putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+              Just (Ignore newfiles) -> do
+                  case newfiles of
+                      [] -> putRed "[]"
+                      xs -> putStrLn $ show xs
+                  --watchPromt $ Setting (doCat) filepaths (may_command) (concat [flag_ignores, newfiles])
+                  --putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+              Just (RemoveFlags remove_those) -> do
+                  let flags = filter (\x -> x `notElem` remove_those) flag_ignores
 
-                      command <- updateFlags remove_those REMOVE_FLAGS 
-                      cmdOut <- try (callCommand command) >>=
-                          \x -> case x of
-                              Left (err :: SomeException) -> do
-                                  putBoldRed $ "\nRM using sed failed:\n" ++ (show err)
-                                  pure ()
-                              Right x -> pure ()
-
-                      watchFiles $ Setting (doCat) filepaths (may_command) flags
-                  Just GDB -> do
-                      compileFile $ Setting doCat filepaths Nothing flag_ignores -- FIXME
-                      putBoldBlue "Gimmie path to binary"
-                      binary <- getLine
-                      putBoldBlue "Gimmie seq of instructions"
-                      -- TODO
-                      -- Gimmie seq of instructions
-                      -- :b x.cpp; :threadinfo; run;
-                      -- [":b","x.cpp;",":threadinfo;","run;"]
-                      instructions <- getLine >>= putStrLn . show . words
-                      gdbResult <- try (callCommand $ "gdb " ++ binary) -- FIXME
-                      case gdbResult of
+                  command <- updateFlags remove_those REMOVE_FLAGS 
+                  cmdOut <- try (callCommand command) >>=
+                      \x -> case x of
                           Left (err :: SomeException) -> do
-                              putBoldRed $ "\nBTW gdb failed...\n"
+                              putBoldRed $ "\nRM using sed failed:\n" ++ (show err)
+                              pure ()
+                          Right x -> pure ()
+                  pure ()
+                  --watchPromt $ Setting (doCat) filepaths (may_command) flags
+                  --putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+              Just GDB -> do
+                  compileFile $ Setting doCat filepaths Nothing flag_ignores -- FIXME
+                  putBoldBlue "Gimmie path to binary"
+                  binary <- getLine
+                  putBoldBlue "Gimmie seq of instructions"
+                  -- TODO
+                  -- Gimmie seq of instructions
+                  -- :b x.cpp; :threadinfo; run;
+                  -- [":b","x.cpp;",":threadinfo;","run;"]
+                  instructions <- getLine >>= putStrLn . show . words
+                  gdbResult <- try (callCommand $ "gdb " ++ binary) -- FIXME
+                  case gdbResult of
+                      Left (err :: SomeException) -> do
+                          putBoldRed $ "\nBTW gdb failed...\n"
+                          putBoldRed $ show err
+                          pure ()
+                      _ -> pure ()
+
+                  return ()
+              Just RunClangTidy -> case may_command of
+                  Just cmd -> do
+                      tidyResult <- try (callCommand cmd)
+                      case tidyResult of
+                          Right _ -> putBoldGreen "TIDY done" >> pure ()
+                          Left (err :: SomeException) -> do
+                              putBoldRed $ "\nBTW files won't compile...\n"
                               putBoldRed $ show err
                               pure ()
-                          _ -> pure ()
 
-                      return ()
-                  Just RunClangTidy -> case may_command of
-                      Just cmd -> do
-                          tidyResult <- try (callCommand cmd)
-                          case tidyResult of
-                              Right _ -> putBoldGreen "TIDY done" >> pure ()
-                              Left (err :: SomeException) -> do
-                                  putBoldRed $ "\nBTW files won't compile...\n"
-                                  putBoldRed $ show err
-                                  pure ()
+                  Nothing -> pure()
+              _ -> putBoldBlue "Tell this to your mother"
+          putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+          putStr "λ> " >> pure ()
 
-                      Nothing -> pure()
-                  _ -> putBoldBlue "Tell this to your mother"
-              putStr "λ> " >> pure ()
+        -- Nothing -> do
+        --     initTime <- readIORef initTimeRef
+        --     modifiedTime <- maximum <$> mapM (getModificationTime) filepaths
+        --     when (modifiedTime > initTime) $ writeIORef breakLoop True
+        --     pure ()
+        --) 
+    
+    --case result of
+        --Left (BreakLoopException) -> pure ()
+        --Right _ -> pure ()
 
-            Nothing -> do
-                initTime <- readIORef initTimeRef
-                modifiedTime <- maximum <$> mapM (getModificationTime) filepaths
-                when (modifiedTime > initTime) $ writeIORef breakLoop True
-                pure ()
-            ) 
-        
-        case result of
-            Left (BreakLoopException) -> pure ()
-            Right _ -> pure ()
-
-        pure ()
+    pure ()
 
 
 getCommand :: [String] -> Maybe MyCommand
@@ -399,5 +416,8 @@ main = do
     args <- getArgs
 
     case parseArgs args of
-        (doCat, Just filepath, command) -> watchFiles $ Setting doCat [filepath] command []
+        (doCat, Just filepath, command) -> do
+            mv <- putMVar $ Setting doCat [filepath] command []
+            forkIO $ watchFiles mv
+            forkIO $ watchPromt mv
         _ -> putStrLn "Usage: watchfile ?-doCat? <filepath> ?tidy command?."
