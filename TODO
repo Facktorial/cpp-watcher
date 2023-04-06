@@ -21,6 +21,8 @@
     * [x] handling exceptions
 - add history completer
 - ASM function mode
+- load settings from json
+- fix calling
 
 ## Done
 
