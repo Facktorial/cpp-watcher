@@ -8,7 +8,7 @@ import System.Directory hiding (findFiles)
 import System.Process (
   callCommand, readProcess, createProcess, waitForProcess, proc
                       )
-import Control.Concurrent (threadDelay, forkIO, MVar)
+import Control.Concurrent (threadDelay, forkIO, MVar, takeMVar, putMVar, newMVar)
 import System.Environment
 import System.FilePath.Posix (takeFileName)
 import System.FilePath ((</>))
@@ -268,46 +268,50 @@ completerLoop mpath = runInputT defaultSettings (loop' path)
 watchFiles :: MVar Setting -> IO ()
 --watchFiles (Setting doCat filepaths may_command flag_ignores) = do
 watchFiles settingsMVar = do
-    initTimeRef <- newIORef =<< maximum <$> mapM getModificationTime filepaths
+    settings <- takeMVar settingsMVar
+    putMVar settingsMVar settings
+
+    initTimeRef <- newIORef =<< maximum <$> mapM getModificationTime (files settings)
+
     forever $ do
-        --putStrLn "new loop"
+        settings <- takeMVar settingsMVar
+        putMVar settingsMVar settings
+
         threadDelay time_period
         initTime <- readIORef initTimeRef
-        modifiedTime <- maximum <$> mapM (getModificationTime) filepaths
+        modifiedTime <- maximum <$> mapM (getModificationTime) (files settings)
         --threadDelay time_period >> putStrLn (filepath ++ ": " ++ show modifiedTime)
         --          >> putStrLn ((mapToSpaces filepath) ++ ": " ++ show initTime)
 
         when (modifiedTime > initTime) $ do
-            settings <- takeMVar settingMVar
+            settings <- takeMVar settingsMVar
+            putMVar settingsMVar settings
 
         --when (modifiedTime >) <=< readIORef $ initTimeRef $ do
             compileFile settings
+            putStr "λ> "
             writeIORef initTimeRef modifiedTime
             pure ()
+        pure ()
 
 watchPromt :: MVar Setting -> IO ()
 --watchPromt (Setting doCat filepaths may_command flag_ignores) = do
-watchPromt settingMVar = do
+watchPromt settingsMVar = do
+    putStrLn "watchPromt loop"
+
     Setting { cat = doCat
             , files = filepaths
             , tidy = may_command
             , ignores = flag_ignores
-            } <- takeMVar settingMVar
+            } <- takeMVar settingsMVar
+    putMVar settingsMVar $ Setting doCat filepaths may_command flag_ignores
+
     putStr "λ> "
     hFlush stdout
 
-    --breakLoop <- newIORef False
-    --result <- try (forever $ do
     forever $ do
-      --readIORef breakLoop >>= putBoldGreen . show
-      --readIORef breakLoop >>= \case
-          --True -> break ()
-          --True -> throwIO BreakLoopException
-          --False -> pure ()
-
       input <- timeout time_out getLine
-      --input <- timeout time_out (completerLoop Nothing)
-      --input <- timeout time_out $ runInputT defaultSettings (completer2Loop Nothing "> ")
+
       -- FIXME
       case input of
         Just input -> do
@@ -318,7 +322,7 @@ watchPromt settingMVar = do
                   compileFile $ Setting doCat filepaths may_command flag_ignores
                   return ()
               --Just SwitchCat -> watchPromt $ Setting (not doCat) (filepaths) (may_command) flag_ignores
-              --Just SwitchCat -> putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+              --Just SwitchCat -> putMVar settingsMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
               Just ListFiles -> mapM_ (putStrLn <$> (" " ++)) filepaths
               Just ListFlags -> mapM_ (putStrLn <$> (" " ++)) flag_ignores
               Just (AddFiles newfiles) -> do
@@ -327,7 +331,8 @@ watchPromt settingMVar = do
                       [] -> putRed "[]"
                       xs -> putStrLn $ show xs
                   --watchPromt $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
-                  --putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+                  _ <- takeMVar settingsMVar
+                  putMVar settingsMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
               Just (Ignore newfiles) -> do
                   case newfiles of
                       [] -> putRed "[]"
@@ -378,19 +383,10 @@ watchPromt settingMVar = do
 
                   Nothing -> pure()
               _ -> putBoldBlue "Tell this to your mother"
-          putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+          --putMVar settingsMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
           putStr "λ> " >> pure ()
-
-        -- Nothing -> do
-        --     initTime <- readIORef initTimeRef
-        --     modifiedTime <- maximum <$> mapM (getModificationTime) filepaths
-        --     when (modifiedTime > initTime) $ writeIORef breakLoop True
-        --     pure ()
-        --) 
-    
-    --case result of
-        --Left (BreakLoopException) -> pure ()
-        --Right _ -> pure ()
+        --_ -> putBoldBlue "Well..." >> pure ()
+        _ -> pure ()
 
     pure ()
 
@@ -417,7 +413,8 @@ main = do
 
     case parseArgs args of
         (doCat, Just filepath, command) -> do
-            mv <- putMVar $ Setting doCat [filepath] command []
-            forkIO $ watchFiles mv
-            forkIO $ watchPromt mv
+            mv <- newMVar $ Setting doCat [filepath] command []
+            _ <- forkIO $ watchFiles mv
+            _ <- forkIO $ watchPromt mv
+            forever $ threadDelay time_out
         _ -> putStrLn "Usage: watchfile ?-doCat? <filepath> ?tidy command?."
