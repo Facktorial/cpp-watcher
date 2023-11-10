@@ -117,9 +117,13 @@ findFiles fileName path = do
 updateFlags :: [String] -> UpdateMode -> IO (String)
 updateFlags ignores mod = do
     foundlings <- findFiles "flags.make" "."
-    putStrLn $ show $ head foundlings
+    let fs =  if null foundlings
+        then []
+        else head foundlings
+    -- putStrLn $ show $ head foundlings
 
-    flags <- try (readProcess "grep" ["CXX_FLAGS", (head foundlings)] "") >>=
+    -- flags <- try (readProcess "grep" ["CXX_FLAGS", (head foundlings)] "") >>=
+    flags <- try (readProcess "grep" ["CXX_FLAGS", fs] "") >>=
         \str -> case str of
             Left (err :: SomeException) -> do
                 putBoldRed $ "\nGrep failed with:\n" ++ (show err)
@@ -128,10 +132,12 @@ updateFlags ignores mod = do
 
     let command = case mod of
          ADD_FLAGS -> "sed -i \'/^CXX_FLAGS/ s/$/"
-             ++ (concat $ map (\x -> " "++ x) ignores) ++ "/\' " ++ (head foundlings)
+             -- ++ (concat $ map (\x -> " "++ x) ignores) ++ "/\' " ++ (head foundlings)
+             ++ (concat $ map (\x -> " "++ x) ignores) ++ "/\' " ++ fs
          REMOVE_FLAGS -> "sed -i \'s/^CXX_FLAGS.*/" ++
              (unwords $ filter (\x -> x `notElem` ignores) $ words flags) ++
-             "/\' " ++ (head foundlings)
+             -- "/\' " ++ (head foundlings)
+             "/\' " ++ fs
     putStrLn command
 
     return command
@@ -152,7 +158,6 @@ compileFile (Setting doCat filepaths may_command ignores) = do
                 pure ()
             Right x -> pure ()
  
-
     compileResult <- try (
         readProcess "make" ["V=1"] "")
     case compileResult of
@@ -162,7 +167,8 @@ compileFile (Setting doCat filepaths may_command ignores) = do
             runErr <- either (\err -> return $ Left (err :: IOError))
                              (\out -> putGreen "Run OK" >> return (Right out))
                              -- =<< try (callCommand $ "make run-" ++ filepath)
-                             =<< try (callCommand $ "./" ++ (getBinaryName x))
+                             -- FIXME: =<< try (callCommand $ "./" ++ (getBinaryName x))
+                             =<< try (callCommand $ "./" ++ "builder_main")
                              -- =<< try (callCommand command)
             pure ()
         Left (err :: SomeException) -> do
