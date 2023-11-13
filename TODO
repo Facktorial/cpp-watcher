@@ -19,6 +19,7 @@
     * [x] add Add option
     * [ ] vargs files
     * [x] handling exceptions
+    * [ ] . -> watch all in folder
 - add history completer
 - ASM function mode
 - load settings from json

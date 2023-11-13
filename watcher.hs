@@ -39,7 +39,13 @@ data Color = Red | Green | Blue
 type MyCommand = String
 type Flags = [String]
 
-data Setting = Setting { cat :: Bool, files :: [FilePath], tidy :: Maybe MyCommand, ignores :: Flags }
+data Setting = Setting {
+    cat :: Bool,
+    files :: [FilePath],
+    tidy :: Maybe MyCommand,
+    ignores :: Flags,
+    run_cmd :: Maybe String
+}
   deriving (Eq, Show, Read)
 
 data Input
@@ -49,6 +55,8 @@ data Input
     | GDB
     | ListFiles
     | ListFlags
+    | Cmd
+    | RunCommand String
     | AddFiles [String]
     | Ignore [String]
     | RemoveFlags [String]
@@ -58,6 +66,7 @@ parseInput :: String -> Maybe Input
 parseInput ":gdb" = Just GDB
 parseInput ":tidy" = Just RunClangTidy
 parseInput ":compile" = Just Compile
+parseInput ":cmd" = Just Cmd
 parseInput ":c" = Just Compile
 parseInput ":cat" = Just SwitchCat
 parseInput ":ls" = Just ListFiles
@@ -68,7 +77,9 @@ parseInput str = case stripPrefix (pack ":add ") (pack str) of
         Just rest -> Just $ Ignore $ words (unpack rest)
         Nothing -> case stripPrefix (pack ":rm_flags ") (pack str) of
             Just rest -> Just $ RemoveFlags $ words (unpack rest)
-            Nothing -> Nothing
+            Nothing -> case stripPrefix (pack ":runcmd ") (pack str) of
+                Just rest -> Just $ RunCommand $ (unpack rest)
+                Nothing -> Nothing
 
 colorString :: Color -> String
 colorString Red = "91"
@@ -144,7 +155,7 @@ updateFlags ignores mod = do
 
 
 compileFile :: Setting -> IO ()
-compileFile (Setting doCat filepaths may_command ignores) = do
+compileFile (Setting doCat filepaths may_command ignores runcmd) = do
     callCommand "clear"
     --compileResult <- readProcess "make" [] "" >>= putGreen
     --compileResult <- try (readProcess "make" [takeWhile isAlphaNum filepath] "")
@@ -168,7 +179,10 @@ compileFile (Setting doCat filepaths may_command ignores) = do
                              (\out -> putGreen "Run OK" >> return (Right out))
                              -- =<< try (callCommand $ "make run-" ++ filepath)
                              -- FIXME: =<< try (callCommand $ "./" ++ (getBinaryName x))
-                             =<< try (callCommand $ "./" ++ "builder_main")
+                             =<< try (callCommand $ case runcmd of
+                                Nothing -> "./" ++ "builder_main"
+                                Just cmd -> cmd
+                                )
                              -- =<< try (callCommand command)
             pure ()
         Left (err :: SomeException) -> do
@@ -309,8 +323,9 @@ watchPromt settingsMVar = do
             , files = filepaths
             , tidy = may_command
             , ignores = flag_ignores
+            , run_cmd = runcmd
             } <- takeMVar settingsMVar
-    putMVar settingsMVar $ Setting doCat filepaths may_command flag_ignores
+    putMVar settingsMVar $ Setting doCat filepaths may_command flag_ignores runcmd
 
     putStr "λ> "
     hFlush stdout
@@ -323,9 +338,18 @@ watchPromt settingsMVar = do
         Just input -> do
           let maybeInput = parseInput input
 
-          case maybeInput of 
+          case maybeInput of
+              Just Cmd  -> putStrLn $ case runcmd of
+                  Just cmd -> cmd
+                  Nothing -> "Nothing"
+              Just (RunCommand cmd)  -> do
+                  putStrLn cmd
+                  _ <- takeMVar settingsMVar
+                  putMVar settingsMVar $ Setting (doCat) (filepaths) (may_command) flag_ignores (Just cmd)
+                  watchPromt settingsMVar
               Just Compile -> do
-                  compileFile $ Setting doCat filepaths may_command flag_ignores
+                  compileFile $ Setting doCat filepaths may_command flag_ignores runcmd
+                  putStrLn . maybe "Nothing" id $ runcmd
                   return ()
               --Just SwitchCat -> watchPromt $ Setting (not doCat) (filepaths) (may_command) flag_ignores
               --Just SwitchCat -> putMVar settingsMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
@@ -338,7 +362,7 @@ watchPromt settingsMVar = do
                       xs -> putStrLn $ show xs
                   --watchPromt $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
                   _ <- takeMVar settingsMVar
-                  putMVar settingsMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
+                  putMVar settingsMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores runcmd
               Just (Ignore newfiles) -> do
                   case newfiles of
                       [] -> putRed "[]"
@@ -359,7 +383,7 @@ watchPromt settingsMVar = do
                   --watchPromt $ Setting (doCat) filepaths (may_command) flags
                   --putMVar settingMVar $ Setting (doCat) (concat [filepaths,  exFiles]) (may_command) flag_ignores
               Just GDB -> do
-                  compileFile $ Setting doCat filepaths Nothing flag_ignores -- FIXME
+                  compileFile $ Setting doCat filepaths Nothing flag_ignores runcmd -- FIXME
                   putBoldBlue "Gimmie path to binary"
                   binary <- getLine
                   putBoldBlue "Gimmie seq of instructions"
@@ -419,7 +443,7 @@ main = do
 
     case parseArgs args of
         (doCat, Just filepath, command) -> do
-            mv <- newMVar $ Setting doCat [filepath] command []
+            mv <- newMVar $ Setting doCat [filepath] command [] Nothing
             _ <- forkIO $ watchFiles mv
             _ <- forkIO $ watchPromt mv
             forever $ threadDelay time_out
